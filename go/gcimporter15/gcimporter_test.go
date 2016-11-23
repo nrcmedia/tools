@@ -2,10 +2,8 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-// +build go1.5
-
-// This file is a copy of $GOROOT/src/go/internal/gcimporter/gcimporter_test.go, tagged for go1.5,
-// and minimally adjusted to make it build with code from (std lib) internal/testenv copied.
+// This file is a copy of $GOROOT/src/go/internal/gcimporter/gcimporter_test.go,
+// adjusted to make it build with code from (std lib) internal/testenv copied.
 
 package gcimporter
 
@@ -130,6 +128,8 @@ func testDir(t *testing.T, dir string, endTime time.Time) (nimports int) {
 	return
 }
 
+const testfile = "exports.go"
+
 func TestImportTestdata(t *testing.T) {
 	// This package only handles gc export data.
 	if runtime.Compiler != "gc" {
@@ -147,10 +147,12 @@ func TestImportTestdata(t *testing.T) {
 		// The package's Imports list must include all packages
 		// explicitly imported by testfile, plus all packages
 		// referenced indirectly via exported objects in testfile.
-		// With the textual export format, the list may also include
-		// additional packages that are not strictly required for
-		// import processing alone (they are exported to err "on
-		// the safe side").
+		// With the textual export format (when run against Go1.6),
+		// the list may also include additional packages that are
+		// not strictly required for import processing alone (they
+		// are exported to err "on the safe side").
+		// For now, we just test the presence of a few packages
+		// that we know are there for sure.
 		got := fmt.Sprint(pkg.Imports())
 		for _, want := range []string{"go/ast", "go/token"} {
 			if !strings.Contains(got, want) {

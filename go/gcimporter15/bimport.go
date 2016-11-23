@@ -2,9 +2,7 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-// +build go1.5
-
-// This file is a copy of $GOROOT/src/go/internal/gcimporter/bimport.go, tagged for go1.5.
+// This file is a copy of $GOROOT/src/go/internal/gcimporter/bimport.go.
 
 package gcimporter
 
@@ -225,10 +223,11 @@ func objTag(obj types.Object) int {
 		return funcTag
 	// Aliases are not exported multiple times, thus we should not see them here.
 	default:
-		errorf("unexpected object: %v (%T)", obj, obj)
+		errorf("unexpected object: %v (%T)", obj, obj) // panics
 		panic("unreachable")
 	}
 }
+
 func sameObj(a, b types.Object) bool {
 	// Because unnamed types are not canonicalized, we cannot simply compare types for
 	// (pointer) identity.
@@ -236,7 +235,7 @@ func sameObj(a, b types.Object) bool {
 	return objTag(a) == objTag(b) && types.Identical(a.Type(), b.Type())
 }
 
-func (p *importer) declare(obj types.Object) types.Object {
+func (p *importer) declare(obj types.Object) {
 	pkg := obj.Pkg()
 	if alt := pkg.Scope().Insert(obj); alt != nil {
 		// This can only trigger if we import a (non-type) object a second time.
@@ -244,48 +243,33 @@ func (p *importer) declare(obj types.Object) types.Object {
 		// once; and b) we ignore compiler-specific export data which may contain
 		// functions whose inlined function bodies refer to other functions that
 		// were already imported.
-		// However, if a package exports multiple aliases referring to the same
-		// original object, that object is currently exported multiple times.
-		// Check for that specific case and accept it if the aliases correspond
-		// (see also the comment in cmd/compile/internal/gc/bimport.go, method
-		// importer.obj, switch case importing functions).
+		// However, aliases require reexporting the original object, so we need
+		// to allow it (see also the comment in cmd/compile/internal/gc/bimport.go,
+		// method importer.obj, switch case importing functions).
 		// Note that the original itself cannot be an alias.
-		// TODO(gri) We can avoid doing this once objects are exported only once
-		// per package again (issue #17636).
 		if !sameObj(obj, alt) {
-			errorf("inconsistent import:\n\t%v\npreviously imported as:\n\t%v\n", alt, obj)
+			errorf("inconsistent import:\n\t%v\npreviously imported as:\n\t%v\n", obj, alt)
 		}
-		obj = alt // use object that was imported first
 	}
-	return obj
 }
 
 func (p *importer) obj(tag int) {
-	var aliasPos token.Pos
-	var aliasName string
-	if tag == aliasTag {
-		aliasPos = p.pos()
-		aliasName = p.string()
-		tag = p.tagOrIndex()
-	}
-
-	var obj types.Object
 	switch tag {
 	case constTag:
 		pos := p.pos()
 		pkg, name := p.qualifiedName()
 		typ := p.typ(nil)
 		val := p.value()
-		obj = p.declare(types.NewConst(pos, pkg, name, typ, val))
+		p.declare(types.NewConst(pos, pkg, name, typ, val))
 
 	case typeTag:
-		obj = p.typ(nil).(*types.Named).Obj()
+		p.typ(nil)
 
 	case varTag:
 		pos := p.pos()
 		pkg, name := p.qualifiedName()
 		typ := p.typ(nil)
-		obj = p.declare(types.NewVar(pos, pkg, name, typ))
+		p.declare(types.NewVar(pos, pkg, name, typ))
 
 	case funcTag:
 		pos := p.pos()
@@ -293,14 +277,23 @@ func (p *importer) obj(tag int) {
 		params, isddd := p.paramList()
 		result, _ := p.paramList()
 		sig := types.NewSignature(nil, params, result, isddd)
-		obj = p.declare(types.NewFunc(pos, pkg, name, sig))
+		p.declare(types.NewFunc(pos, pkg, name, sig))
+
+	case aliasTag:
+		pos := p.pos()
+		name := p.string()
+		var orig types.Object
+		if pkg, name := p.qualifiedName(); pkg != nil {
+			orig = pkg.Scope().Lookup(name)
+		}
+		// Alias-related code. Keep for now.
+		_ = pos
+		_ = name
+		_ = orig
+		// p.declare(types.NewAlias(pos, p.pkgList[0], name, orig))
 
 	default:
 		errorf("unexpected object tag %d", tag)
-	}
-
-	if aliasName != "" {
-		p.declare(newAlias(aliasPos, p.pkgList[0], aliasName, obj))
 	}
 }
 
@@ -358,7 +351,9 @@ var (
 
 func (p *importer) qualifiedName() (pkg *types.Package, name string) {
 	name = p.string()
-	pkg = p.pkg()
+	if name != "" {
+		pkg = p.pkg()
+	}
 	return
 }
 
@@ -553,7 +548,7 @@ func (p *importer) typ(parent *types.Package) types.Type {
 		return t
 
 	default:
-		errorf("unexpected type tag %d", i)
+		errorf("unexpected type tag %d", i) // panics
 		panic("unreachable")
 	}
 }
@@ -621,6 +616,20 @@ func (p *importer) fieldName(parent *types.Package) (*types.Package, string) {
 	}
 	if p.version == 0 && name == "_" {
 		// version 0 didn't export a package for _ fields
+		// see issue #15514
+
+		// For bug-compatibility with gc, pretend all imported
+		// blank fields belong to the same dummy package.
+		// This avoids spurious "cannot assign A to B" errors
+		// from go/types caused by types changing as they are
+		// re-exported.
+		const blankpkg = "<_>"
+		pkg := p.imports[blankpkg]
+		if pkg == nil {
+			pkg = types.NewPackage(blankpkg, blankpkg)
+			p.imports[blankpkg] = pkg
+		}
+
 		return pkg, name
 	}
 	if name != "" && !exported(name) {
@@ -704,7 +713,7 @@ func (p *importer) value() constant.Value {
 	case unknownTag:
 		return constant.MakeUnknown()
 	default:
-		errorf("unexpected value tag %d", tag)
+		errorf("unexpected value tag %d", tag) // panics
 		panic("unreachable")
 	}
 }
